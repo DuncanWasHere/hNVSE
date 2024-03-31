@@ -1,4 +1,4 @@
-
+A New Vegas Script Extender plugin.
 
 ## Credits
 
