@@ -1,5 +1,5 @@
 add_library("${PROJECT_NAME}" SHARED
-        main.cpp
+        mane.cpp
 )
 
 add_custom_command(TARGET "${PROJECT_NAME}" POST_BUILD
