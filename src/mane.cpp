@@ -112,7 +112,7 @@ extern "C"
         // fill out the info structure
         info->infoVersion = PluginInfo::kInfoVersion;
         info->name = "hNVSE";
-        info->version = 1;
+        info->version = 2;
 
         // version checks
         if (nvse->nvseVersion < 0) {
