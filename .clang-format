@@ -9,7 +9,7 @@ AlignConsecutiveDeclarations:
 AlignEscapedNewlines: Left
 AlignTrailingComments: true
 BasedOnStyle: "Microsoft"
-BreakBeforeBraces: Mozilla
+BreakBeforeBraces: Stroustrup
 IndentExternBlock: Indent
 InsertNewlineAtEOF: true
 NamespaceIndentation: All
