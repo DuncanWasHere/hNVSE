@@ -2,7 +2,7 @@
 
 #include "hnvse.hpp"
 
-DEFINE_COMMAND_PLUGIN(SetWorldspaceMapBounds, "Sets the NW and SE cell coordinates for a worldspace's map.", false, kParams_OneWorldSpace_FourInts);
+DEFINE_COMMAND_PLUGIN(SetWorldspaceMapBounds, "Sets the northwest and southeast cell coordinates of a worldspace's map.", false, kParams_OneWorldSpace_FourInts);
 
 bool Cmd_SetWorldspaceMapBounds_Execute(COMMAND_ARGS) {
 	TESWorldSpace* aWorldSpace = nullptr;

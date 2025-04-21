@@ -17,9 +17,9 @@ extern NVSEConsoleInterface*       g_consoleInterface;
 extern NVSEEventManagerInterface*  g_eventInterface;
 
 static ParamInfo kParams_OneWorldSpace_FourInts[5] = {
-    {"world space", kParamType_WorldSpace, 0},
-    {"nw x", kParamType_Integer, 0},
-    {"nw y", kParamType_Integer, 0},
-    {"se x", kParamType_Integer, 0},
-    {"se y", kParamType_Integer, 0},
+    {"worldspace", kParamType_WorldSpace, 0},
+    {"xCoordNW", kParamType_Integer, 0},
+    {"yCoordNW", kParamType_Integer, 0},
+    {"xCoordSE", kParamType_Integer, 0},
+    {"yCoordSE", kParamType_Integer, 0},
 };
