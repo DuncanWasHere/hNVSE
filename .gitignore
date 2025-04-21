@@ -13,3 +13,4 @@ out
 ## CMake
 
 cmake-build-*
+/build
