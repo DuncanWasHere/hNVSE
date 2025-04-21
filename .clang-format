@@ -13,5 +13,6 @@ BreakBeforeBraces: Mozilla
 IndentExternBlock: Indent
 InsertNewlineAtEOF: true
 NamespaceIndentation: All
+PointerAlignment: Left
 
 ...
