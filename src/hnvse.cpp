@@ -64,7 +64,7 @@ void MessageHandler(NVSEMessagingInterface::Message* msg) {
         */
 
     case NVSEMessagingInterface::kMessage_DeferredInit:
-        Console_Print("hNVSE version 1.0: Howdy neigh-bor!"); // TODO: Plugin version macro
+        Console_Print("hNVSE version %.2f: Howdy neigh-bor!", (g_pluginVersion / 100.0F));
         break;
     default:
         break;
