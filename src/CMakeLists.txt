@@ -1,5 +1,7 @@
 add_library("${PROJECT_NAME}" SHARED
-        mane.cpp
+        hnvse.cpp
+        hnvse.hpp
+        functions/hnvse_fn_worldspace.hpp
 )
 
 add_custom_command(TARGET "${PROJECT_NAME}" POST_BUILD

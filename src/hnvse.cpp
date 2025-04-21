@@ -1,67 +1,38 @@
-#include "nvse/GameAPI.h"
-#include "nvse/PluginAPI.h"
+#include "hnvse.hpp"
 
-IDebugLog    gLog("hNVSE.log");
-PluginHandle g_pluginHandle = kPluginHandle_Invalid;
+// Script Functions
+#include "functions/hnvse_fn_worldspace.hpp"
 
-NVSEMessagingInterface    *g_messagingInterface{};
-NVSEInterface             *g_nvseInterface{};
-NVSECommandTableInterface *g_cmdTableInterface{};
+// Plugin Globals
+IDebugLog        g_log;
+PluginHandle     g_pluginHandle = kPluginHandle_Invalid;
+constexpr UInt32 g_pluginVersion = 110;
 
-// RUNTIME = Is not being compiled as a GECK plugin.
-#if RUNTIME
-NVSEScriptInterface        *g_script{};
-NVSEStringVarInterface     *g_stringInterface{};
-NVSEArrayVarInterface      *g_arrayInterface{};
-NVSEDataInterface          *g_dataInterface{};
-NVSESerializationInterface *g_serializationInterface{};
-NVSEConsoleInterface       *g_consoleInterface{};
-NVSEEventManagerInterface  *g_eventInterface{};
-bool                        (*ExtractArgsEx)(COMMAND_ARGS_EX, ...);
+// NVSE Globals
+bool (*ExtractArgsEx)(COMMAND_ARGS_EX, ...);
+NVSEInterface*             g_nvseInterface = nullptr;
+NVSEDataInterface*         g_dataInterface = nullptr;
+NVSESerializationInterface* g_serializationInterface = nullptr;
+NVSEConsoleInterface*      g_consoleInterface = nullptr;
+NVSEMessagingInterface*    g_messagingInterface = nullptr;
+NVSECommandTableInterface* g_cmdTableInterface = nullptr;
+NVSEScriptInterface*       g_script = nullptr;
+NVSEStringVarInterface*    g_stringInterface = nullptr;
+NVSEArrayVarInterface*     g_arrayInterface = nullptr;
+NVSEEventManagerInterface* g_eventInterface = nullptr;
 
-#define WantInventoryRefFunctions 0 // set to 1 if you want these PluginAPI functions
-#if WantInventoryRefFunctions
-_InventoryReferenceCreate       InventoryReferenceCreate{};
-_InventoryReferenceGetForRefID  InventoryReferenceGetForRefID{};
-_InventoryReferenceGetRefBySelf InventoryReferenceGetRefBySelf{};
-_InventoryReferenceCreateEntry  InventoryReferenceCreateEntry{};
-#endif
+// Macros
+#define RegisterScriptCommand(name) nvse->RegisterCommand(&kCommandInfo_##name); // Default return type (return a number)
+#define REG_CMD(name) nvse->RegisterCommand(&kCommandInfo_##name);                                    // from JIPLN
+#define REG_TYPED_CMD(name, type) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_##type); // from JG
+#define REG_CMD_STR(name) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_String);         // From JIPLN
+#define REG_CMD_ARR(name) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_Array);          // From JIPLN
+#define REG_CMD_FORM(name) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_Form);          // From SO
+#define REG_CMD_AMB(name) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_Ambiguous);      // From SO
 
-#define WantLambdaFunctions 0 // set to 1 if you want these PluginAPI functions
-#if WantLambdaFunctions
-_LambdaDeleteAllForScript LambdaDeleteAllForScript{};
-_LambdaSaveVariableList   LambdaSaveVariableList{};
-_LambdaUnsaveVariableList LambdaUnsaveVariableList{};
-_IsScriptLambda           IsScriptLambda{};
-#endif
-
-#define WantScriptFunctions 0 // set to 1 if you want these PluginAPI functions
-#if WantScriptFunctions
-_HasScriptCommand HasScriptCommand{};
-_DecompileScript  DecompileScript{};
-#endif
-
-#endif
-
-/****************
- * Here we include the code + definitions for our script functions,
- * which are packed in header files to avoid lengthening this file.
- * Notice that these files don't require #include statements for globals/macros like ExtractArgsEx.
- * This is because the "fn_.h" files are only used here,
- * and they are included after such globals/macros have been defined.
- ***************/
-
-// To Do: Make script functions
-
-// Function Macros
-#define REG_CMD(name) nvse->RegisterCommand(&kCommandInfo_##name) // Number return type
-#define REG_TYPED_CMD(name, type) \
-    nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_##type) // Non-number return types
-
-// This is a message handler for nvse events
+// This is a message handler for NVSE events
 // With this, plugins can listen to messages such as whenever the game loads
-void MessageHandler(NVSEMessagingInterface::Message *msg)
-{
+void MessageHandler(NVSEMessagingInterface::Message* msg) {
     switch (msg->type) {
 
         /* Unused for now
@@ -93,36 +64,32 @@ void MessageHandler(NVSEMessagingInterface::Message *msg)
         */
 
     case NVSEMessagingInterface::kMessage_DeferredInit:
-        // Make the plugin seem like it's doing something during runtime
-        Console_Print("hNVSE version 1.0: Howdy neigh-bor!"); // Why bother making a variable for this yet
+        Console_Print("hNVSE version 1.0: Howdy neigh-bor!"); // TODO: Plugin version macro
         break;
     default:
         break;
     }
 }
 
-// Everyone else is doing it
-extern "C"
-{
+extern "C" {
 
-    __declspec(dllexport) bool NVSEPlugin_Query(const NVSEInterface *nvse, PluginInfo *info)
-    {
+    __declspec(dllexport) bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info) {
         _MESSAGE("query");
 
-        // fill out the info structure
+        // Basic plugin info
         info->infoVersion = PluginInfo::kInfoVersion;
         info->name = "hNVSE";
         info->version = 2;
 
-        // version checks
+        // Version checks
         if (nvse->nvseVersion < 0) {
-            _ERROR("NVSE version too old (got %08X expected at least %08X)", nvse->nvseVersion, PACKED_NVSE_VERSION);
+            _ERROR("NVSE version too old (got %08X, expected at least %08X)", nvse->nvseVersion, PACKED_NVSE_VERSION);
             return false;
         }
 
         if (!nvse->isEditor) {
             if (nvse->runtimeVersion < RUNTIME_VERSION_1_4_0_525) {
-                _ERROR("incorrect runtime version (got %08X need at least %08X)", nvse->runtimeVersion,
+                _ERROR("Incorrect runtime version (got %08X, need at least %08X)", nvse->runtimeVersion,
                        RUNTIME_VERSION_1_4_0_525);
                 return false;
             }
@@ -131,43 +98,46 @@ extern "C"
                 _ERROR("NoGore is not supported");
                 return false;
             }
-        } else {
+        }
+        else {
             if (nvse->editorVersion < CS_VERSION_1_4_0_518) {
-                _ERROR("incorrect editor version (got %08X need at least %08X)", nvse->editorVersion,
+                _ERROR("Incorrect editor version (got %08X, need at least %08X)", nvse->editorVersion,
                        CS_VERSION_1_4_0_518);
                 return false;
             }
         }
 
-        // version checks pass
-        // any version compatibility checks should be done here
+        // Version checks passed
+
         return true;
     }
 
-    __declspec(dllexport) bool NVSEPlugin_Load(NVSEInterface *nvse)
-    {
+    __declspec(dllexport) bool NVSEPlugin_Load(NVSEInterface* nvse) {
         _MESSAGE("load");
 
         g_pluginHandle = nvse->GetPluginHandle();
 
-        // save the NVSE interface in case we need it later
-        g_nvseInterface = nvse;
+        g_nvseInterface = nvse; // NVSE interface
 
-        // register to receive messages from NVSE
-        g_messagingInterface = static_cast<NVSEMessagingInterface *>(nvse->QueryInterface(kInterface_Messaging));
+        // Script Commands
+        nvse->SetOpcodeBase(0x3f40);
+        REG_CMD(SetWorldspaceMapBounds);
+
+        // Register to receive messages from NVSE
+        g_messagingInterface = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
         g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);
 
         if (!nvse->isEditor) {
 #if RUNTIME
             // script and function-related interfaces
-            g_script = static_cast<NVSEScriptInterface *>(nvse->QueryInterface(kInterface_Script));
-            g_stringInterface = static_cast<NVSEStringVarInterface *>(nvse->QueryInterface(kInterface_StringVar));
-            g_arrayInterface = static_cast<NVSEArrayVarInterface *>(nvse->QueryInterface(kInterface_ArrayVar));
-            g_dataInterface = static_cast<NVSEDataInterface *>(nvse->QueryInterface(kInterface_Data));
-            g_eventInterface = static_cast<NVSEEventManagerInterface *>(nvse->QueryInterface(kInterface_EventManager));
+            g_script = static_cast<NVSEScriptInterface*>(nvse->QueryInterface(kInterface_Script));
+            g_stringInterface = static_cast<NVSEStringVarInterface*>(nvse->QueryInterface(kInterface_StringVar));
+            g_arrayInterface = static_cast<NVSEArrayVarInterface*>(nvse->QueryInterface(kInterface_ArrayVar));
+            g_dataInterface = static_cast<NVSEDataInterface*>(nvse->QueryInterface(kInterface_Data));
+            g_eventInterface = static_cast<NVSEEventManagerInterface*>(nvse->QueryInterface(kInterface_EventManager));
             g_serializationInterface =
-                static_cast<NVSESerializationInterface *>(nvse->QueryInterface(kInterface_Serialization));
-            g_consoleInterface = static_cast<NVSEConsoleInterface *>(nvse->QueryInterface(kInterface_Console));
+                static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
+            g_consoleInterface = static_cast<NVSEConsoleInterface*>(nvse->QueryInterface(kInterface_Console));
             ExtractArgsEx = g_script->ExtractArgsEx;
 
 #if WantInventoryRefFunctions
@@ -199,14 +169,6 @@ extern "C"
 
 #endif
         }
-
-        /*
-         *
-         * No commands yet... USELESS plugin!!
-         *
-         * nvse->SetOpcodeBase(0x4100);
-         *
-         */
 
         return true;
     }
