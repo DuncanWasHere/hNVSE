@@ -30,6 +30,8 @@ NVSEArrayVarInterface*      g_arrInterface = nullptr;
 #define REG_CMD_FORM(name) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_Form);          // From SO
 #define REG_CMD_AMB(name) nvse->RegisterTypedCommand(&kCommandInfo_##name, kRetnType_Ambiguous);      // From SO
 
+static bool bMergeRegionLists = true;
+
 void MessageHandler(NVSEMessagingInterface::Message* msg) {
     switch (msg->type) {
         case NVSEMessagingInterface::kMessage_DeferredInit:
@@ -92,21 +94,30 @@ extern "C" {
         g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);
 
         if (!nvse->isEditor) {
-            #if RUNTIME
-                // Script and function-related interfaces
-                g_script = static_cast<NVSEScriptInterface*>(nvse->QueryInterface(kInterface_Script));
-                g_stringInterface = static_cast<NVSEStringVarInterface*>(nvse->QueryInterface(kInterface_StringVar));
-                g_arrayInterface = static_cast<NVSEArrayVarInterface*>(nvse->QueryInterface(kInterface_ArrayVar));
-                g_dataInterface = static_cast<NVSEDataInterface*>(nvse->QueryInterface(kInterface_Data));
-                g_eventInterface = static_cast<NVSEEventManagerInterface*>(nvse->QueryInterface(kInterface_EventManager));
-                g_serializationInterface = static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
-                g_consoleInterface = static_cast<NVSEConsoleInterface*>(nvse->QueryInterface(kInterface_Console));
-                g_arrInterface = static_cast<NVSEArrayVarInterface*>(nvse->QueryInterface(kInterface_ArrayVar));
-                ExtractArgsEx = g_script->ExtractArgsEx;
+            // Script and function-related interfaces
+            g_script = static_cast<NVSEScriptInterface*>(nvse->QueryInterface(kInterface_Script));
+            g_stringInterface = static_cast<NVSEStringVarInterface*>(nvse->QueryInterface(kInterface_StringVar));
+            g_arrayInterface = static_cast<NVSEArrayVarInterface*>(nvse->QueryInterface(kInterface_ArrayVar));
+            g_dataInterface = static_cast<NVSEDataInterface*>(nvse->QueryInterface(kInterface_Data));
+            g_eventInterface = static_cast<NVSEEventManagerInterface*>(nvse->QueryInterface(kInterface_EventManager));
+            g_serializationInterface = static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
+            g_consoleInterface = static_cast<NVSEConsoleInterface*>(nvse->QueryInterface(kInterface_Console));
+            g_arrInterface = static_cast<NVSEArrayVarInterface*>(nvse->QueryInterface(kInterface_ArrayVar));
+            ExtractArgsEx = g_script->ExtractArgsEx;
 
-                // Hooks
+            // INI Loading (from Wall)
+            _MESSAGE("Reading INI...");
+            char cINIDir[MAX_PATH];
+            GetModuleFileNameA(GetModuleHandle(NULL), cINIDir, MAX_PATH);
+            strcpy((char*)(strrchr(cINIDir, '\\') + 1), "Data\\NVSE\\Plugins\\hNVSE.ini");
+            bMergeRegionLists = GetPrivateProfileInt("Main", "bMergeRegionLists", 0, cINIDir);
+            _MESSAGE("Done.");
+
+            // Hooks
+            if (bMergeRegionLists) {
                 WriteRelJump(0x4151FD, (UInt32)HookRegionListLoad); // Merge cell region lists between mods during loading
-            #endif
+                _MESSAGE("Applied region list load hook.");
+            }
         }
 
         return true;
