@@ -459,16 +459,24 @@ DEFINE_CMD_ALIAS(DumpCommandWikiDocs, DumpWikiDocs, dumps wiki-style documentati
 	false, kParams_TwoInts_OneOptionalString);
 
 
-static ParamInfo kNVSEParams_Ternary[] =
+static ParamInfo kNVSEParams_TernaryUDF[] =
 {
 	{	"value",			kNVSEParamType_BasicType,	0	},
 	{	"callIfTrue (UDF)",	kNVSEParamType_Form,	0	},
 	{	"callIfFalse (UDF)",	kNVSEParamType_Form,	0	},
 };
+DEFINE_COMMAND_EXP(TernaryUDF, "The ternary operator as a function, calling one of 2 UDFs.", false, kNVSEParams_TernaryUDF);
 
-DEFINE_COMMAND_EXP(Ternary, "The ternary operator as a function.", false, kNVSEParams_Ternary);
+static ParamInfo kNVSEParams_Ternary[] =
+{
+	{	"condition",		kNVSEParamType_Boolean,	0	},
+	{	"resultIfTrue",		kNVSEParamType_NoTypeCheck,	0	},
+	{	"resultIfFalse",	kNVSEParamType_NoTypeCheck,	0	},
+};
+DEFINE_COMMAND_EXP(Ternary, "The ternary operator as a function, for real this time", false, kNVSEParams_Ternary);
 
-DEFINE_COMMAND(GetSoldItemInvRef, "Returns the invRef for the currently sold item (in OnSell event)", false, 0, nullptr);
+
+DEFINE_COMMAND(GetSoldItemInvRef, Returns the invRef for the currently sold item (in OnSell event), false, 0, nullptr);
 
 static ParamInfo kNVSEParams_OneString_OneOptionalBool[] =
 {
@@ -478,3 +486,34 @@ static ParamInfo kNVSEParams_OneString_OneOptionalBool[] =
 
 DEFINE_CMD_ALT_EXP(CompileScript, GetUDFFromFile, "Returns a compiled script from a file, to call as a UDF.", 
 	false, kNVSEParams_OneString_OneOptionalBool);
+
+static ParamInfo kNVSEParams_MatchesAnyOf[] =
+{
+	{	"valueToMatch",	kNVSEParamType_BasicType,	0	},
+
+	{	"value",		kNVSEParamType_BasicType,		0	}, // intentionally non-optional
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+	{	"value",		kNVSEParamType_BasicType,		1	},
+};
+
+DEFINE_CMD_ALT_EXP(MatchesAnyOf, , "Returns true/false if the first value matches any of the other values.",
+	false, kNVSEParams_MatchesAnyOf);

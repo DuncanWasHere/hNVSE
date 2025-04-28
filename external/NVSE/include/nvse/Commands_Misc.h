@@ -2,6 +2,7 @@
 
 #include "CommandTable.h"
 #include "ParamInfos.h"
+#include "ScriptUtils.h"
 
 static ParamInfo kParams_OneOptionalActor[1] =
 {
@@ -86,3 +87,20 @@ DEFINE_CMD(AddAnimation, Add an animation to an NPC or a creature, 0, kParams_On
 DEFINE_CMD(DelAnimation, Delete an animation from an NPC or a creature, 0, kParams_OneStringOneOptionalForm);
 DEFINE_CMD(DelAnimations, Delete all animation from an NPC or a creature, 0, kParams_OneOptionalForm);
 
+static ParamInfo kNVSEParams_GetDoorSound[] =
+{
+	{ "door form"          , kNVSEParamType_Form  , 0 },
+	{ "0 = open, 1 = close", kNVSEParamType_Number,	0 },
+};
+DEFINE_COMMAND_EXP(GetDoorSound, Get the open / close sound of a door, 0, kNVSEParams_GetDoorSound)
+
+static ParamInfo kNVSEParams_FireChallenge[] = {
+	{ "Challenge type", kNVSEParamType_Number, 0},
+	{ "Count", kNVSEParamType_Number, 0 },
+	{ "Weapon", kNVSEParamType_FormOrNumber, 0 },
+	{ "Value 1", kNVSEParamType_Number, 0 },
+	{ "Value 2", kNVSEParamType_Number, 0 },
+	{ "Value 3", kNVSEParamType_Number, 0 }
+};
+
+DEFINE_COMMAND_EXP(FireChallenge, Increment a challenge using specified params, 0, kNVSEParams_FireChallenge)

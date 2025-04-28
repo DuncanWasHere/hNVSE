@@ -724,6 +724,10 @@ namespace DisablePlayerControlsAlt
 	}
 }
 
+void WriteDelayedHooks() {
+	EventManager::WriteDelayedEventHooks();
+}
+
 // boolean, used by ExtraDataList::IsExtraDefaultForContainer() to determine if ExtraOwnership should be treated
 // as 'non-default' for an inventory object. Is 0 in vanilla, set to 1 to make ownership NOT treated as default
 // Might be those addresses, used to decide if can be copied
@@ -811,6 +815,28 @@ static void HandleMainLoopHook(void)
 #endif
 #endif
 		g_mainThreadID = GetCurrentThreadId();
+
+#if RUNTIME
+		WriteDelayedHooks();
+
+		for (auto message : PluginManager::GetLoadErrors()) {
+			// Don't display a message for incompatible plugins?
+			if (message.find("reported as incompatible") != std::string::npos) {
+				continue;
+			}
+
+			const char* b[10] = { nullptr };
+			b[0] = "Ok";
+
+			*ShowMessageBox_pScriptRefID = (*g_thePlayer)->refID;
+
+			*ShowMessageBox_button = 0xFF;	// overwrite any previously pressed button
+			ShowMessageBox(message.c_str(),
+				0, 0, ShowMessageBox_Callback, 0, 0x17, 0, 0,
+				b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], NULL);
+
+		}
+#endif
 		
 		PluginManager::Dispatch_Message(0, NVSEMessagingInterface::kMessage_DeferredInit, NULL, 0, NULL);
 
@@ -822,8 +848,10 @@ static void HandleMainLoopHook(void)
 	PluginManager::Dispatch_Message(0, NVSEMessagingInterface::kMessage_MainGameLoop, nullptr, 0, nullptr);
 
 	// if any temporary references to inventory objects exist, clean them up
-	if (!s_invRefMap.Empty())
+	if (!s_invRefMap.Empty()) {
+		ScopedLock lock(s_invRefMapCS);
 		s_invRefMap.Clear();
+	}
 
 	// Tick event manager
 	EventManager::Tick();

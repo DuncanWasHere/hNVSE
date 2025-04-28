@@ -1973,7 +1973,7 @@ bool Cmd_SetEditorID_Execute(COMMAND_ARGS)
 	char editorId[0x200];
 	if (!ExtractArgs(EXTRACT_ARGS, &form, &editorId))
 		return true;
-	form->SetEditorID(editorId);
+	form->SetEditorID_AtRuntime(editorId);
 	*result = 1;
 	return true;
 }
@@ -1994,7 +1994,7 @@ bool Cmd_CreateFormList_Execute(COMMAND_ARGS)
 		if (numArgs >= 1)
 		{
 			if (auto const edID = eval.Arg(0)->GetString())
-				formList->SetEditorID(edID);
+				formList->SetEditorID_AtRuntime(edID);
 
 			if (numArgs >= 2)
 			{
@@ -2030,6 +2030,23 @@ bool Cmd_GetHeadingAngleX_Execute(COMMAND_ARGS)
 	float hypotenuse = thisObj->GetDistance(targetRef);
 	float fraction = opposite / hypotenuse;
 	*result = (asin(fraction) - thisObj->rotX) * Flt180dPI;
+
+	return true;
+}
+
+bool Cmd_EvaluateInventory_Execute(COMMAND_ARGS) {
+	if (!DYNAMIC_CAST(thisObj, TESObjectREFR, Actor)) {
+		return true;
+	}
+
+	if (!thisObj->IsCharacter()) {
+		return true;
+	}
+
+	TESForm* baseForm = thisObj->baseForm;
+	ValidBip01Names* bipNames = thisObj->GetValidBip01Names();
+
+	ThisStdCall<ValidBip01Names*>(0x606540, baseForm, thisObj, bipNames, 1);
 
 	return true;
 }

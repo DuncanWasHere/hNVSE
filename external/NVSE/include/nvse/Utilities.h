@@ -196,6 +196,16 @@ public:
 	void vShow(const char* msg, va_list args);
 };
 
+// Definitions below are from JIP
+#define GAME_HEAP_ALLOC __asm mov ecx, 0x11F6238 CALL_EAX(0xAA3E40)
+#define GAME_HEAP_FREE  __asm mov ecx, 0x11F6238 CALL_EAX(0xAA4060)
+
+#define GameHeapAlloc(size) ThisStdCall<void*>(0xAA3E40, (void*)0x11F6238, size)
+#define GameHeapFree(ptr) ThisStdCall<void*>(0xAA4060, (void*)0x11F6238, ptr)
+
+#define GetRandomInt(n) ThisStdCall<SInt32, SInt32>(0xAA5230, (void*)0x11C4180, n)
+#define GetRandomIntInRange(iMin, iMax) (GetRandomInt(iMax - iMin) + iMin) 
+
 // thread-safe template versions of ThisStdCall()
 
 template <typename T_Ret = UInt32, typename ...Args>
@@ -222,6 +232,8 @@ void ShowErrorMessageBox(const char* message);
 
 const char* GetModName(TESForm* form);
 
+
+void vShowRuntimeError(Script* script, const char* fmt, va_list args);
 void ShowRuntimeError(Script* script, const char* fmt, ...);
 
 #endif

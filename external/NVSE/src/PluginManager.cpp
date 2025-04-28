@@ -1,5 +1,7 @@
 #include "PluginManager.h"
 
+#include <loader_common/PluginChecker.h>
+
 #include "CommandTable.h"
 #include "common/IDirectoryIterator.h"
 #include "ParamInfos.h"
@@ -111,7 +113,8 @@ static const NVSEInterface g_NVSEInterface =
 	PluginManager::RegisterTypedCommand,
 	PluginManager::GetFalloutDir,
 	0,
-	PluginManager::InitExpressionEvaluatorUtils
+	PluginManager::InitExpressionEvaluatorUtils,
+	PluginManager::RegisterTypedCommandVersion
 };
 
 #ifdef RUNTIME
@@ -249,7 +252,7 @@ PluginInfo * PluginManager::GetInfoByName(const char * name)
 	{
 		LoadedPlugin	* plugin = &(*iter);
 
-		if(plugin->info.name && !strcmp(name, plugin->info.name))
+		if(plugin->info.name && !_stricmp(name, plugin->info.name))
 			return &plugin->info;
 	}
 
@@ -316,7 +319,7 @@ bool PluginManager::RegisterCommand(CommandInfo * _info)
 	return true;
 }
 
-bool PluginManager::RegisterTypedCommand(CommandInfo * _info, CommandReturnType retnType)
+CommandInfo PluginManager::RegisterTypedCommand_Setup(CommandInfo* _info, CommandReturnType& retnType)
 {
 	ASSERT(_info);
 	ASSERT_STR(s_currentLoadingPlugin, "PluginManager::RegisterTypeCommand: called outside of plugin load");
@@ -336,19 +339,36 @@ bool PluginManager::RegisterTypedCommand(CommandInfo * _info, CommandReturnType 
 	else if (info.parse == Cmd_Expression_Plugin_Parse)
 		info.parse = Cmd_Expression_Parse;
 
-	if(!info.shortName) info.shortName = "";
-	if(!info.helpText) info.helpText = "";
+	if (!info.shortName) info.shortName = "";
+	if (!info.helpText) info.helpText = "";
 
+	if (retnType >= kRetnType_Max)
+		retnType = kRetnType_Default;
+
+	return info;
+}
+
+bool PluginManager::RegisterTypedCommand(CommandInfo * _info, CommandReturnType retnType)
+{
+	auto info = RegisterTypedCommand_Setup(_info, retnType);
 	if (info.shortName[0])
 		_MESSAGE("RegTypedCommand  [%04X]  %s (%s)", g_scriptCommands.GetCurID(), info.longName, info.shortName);
 	else
 		_MESSAGE("RegTypedCommand  [%04X]  %s", g_scriptCommands.GetCurID(), info.longName);
 
-	if (retnType >= kRetnType_Max)
-		retnType = kRetnType_Default;
-
 	g_scriptCommands.Add(&info, retnType, s_currentLoadingPlugin->baseOpcode);
+	return true;
+}
 
+bool PluginManager::RegisterTypedCommandVersion(CommandInfo* _info, CommandReturnType retnType, UInt32 requiredPluginVersion)
+{
+	auto info = RegisterTypedCommand_Setup(_info, retnType);
+	if (info.shortName[0])
+		_MESSAGE("RegTypedCommandVersion  [%04X]  %s (%s) for version %u", g_scriptCommands.GetCurID(), info.longName, info.shortName, requiredPluginVersion);
+	else
+		_MESSAGE("RegTypedCommandVersion  [%04X]  %s for version %u", g_scriptCommands.GetCurID(), info.longName, requiredPluginVersion);
+
+	g_scriptCommands.Add(&info, retnType, s_currentLoadingPlugin->baseOpcode, requiredPluginVersion);
 	return true;
 }
 
@@ -525,14 +545,21 @@ PluginManager::PluginLoadState::~PluginLoadState()
 		loadStatus = "loaded correctly";
 	if (loadStatus.empty())
 		loadStatus = "was not loaded for an unknown reason"; // shouldn't happen
-	_MESSAGE("plugin %s (%s; version %u; infoVersion %u) %s",
+
+	char buffer[1024];
+	(void)sprintf_s(buffer, "plugin %s (%s; version %u; infoVersion %u) %s",
 		plugin.path,
 		plugin.info.name ? plugin.info.name : "<NULL>",
 		plugin.info.version,
 		plugin.info.infoVersion,
 		loadStatus.c_str());
-	if (!success)
+
+	_MESSAGE(buffer);
+
+	if (!success) {
+		RegisterLoadError(buffer);
 		FreeLibrary(plugin.handle);
+	}
 }
 
 bool PluginManager::InstallPlugins(const std::vector<std::string>& pluginPaths)
@@ -544,6 +571,14 @@ bool PluginManager::InstallPlugins(const std::vector<std::string>& pluginPaths)
 	{
 		++index;
 		_MESSAGE("checking plugin %s", pluginPath.c_str());
+		char pluginName[260];
+		char extension[16];
+		_splitpath_s(pluginPath.c_str(), NULL, 0, NULL, 0, pluginName, MAX_PATH, extension, ARRAYSIZE(extension));
+		strcat_s(pluginName, extension);
+		if (IsNVSEPlugin(pluginName, m_pluginDirectory.c_str()) == false) {
+			_MESSAGE("plugin %s is not an NVSE plugin", pluginPath.c_str());
+			continue;
+		}
 
 		auto& pluginStatus = queriedPlugins.emplace_back();
 		auto& plugin = pluginStatus.plugin;
@@ -566,6 +601,7 @@ bool PluginManager::InstallPlugins(const std::vector<std::string>& pluginPaths)
 				continue;
 			}
 			pluginStatus.loadStatus = "was not loaded as it does not appear to be an NVSE plugin (NVSE plugins must export NVSEPlugin_Query and NVSEPlugin_Load)";
+			continue;
 		}
 		pluginStatus.loadStatus = FormatString("couldn't be loaded due to an error (win32 error code: %d message: \"%s\")", GetLastError(), GetLastErrorAsString().c_str());
 	}
@@ -936,6 +972,16 @@ PluginHandle PluginManager::LookupHandleFromPath(const char* pluginPath)
 	return kPluginHandle_Invalid;
 }
 
+std::vector<std::string> g_pluginErrorStrings;
+
+void PluginManager::RegisterLoadError(std::string message) {
+	g_pluginErrorStrings.emplace_back(message);
+}
+
+std::vector<std::string> PluginManager::GetLoadErrors() {
+	return g_pluginErrorStrings;
+}
+
 #ifdef RUNTIME
 
 void * PluginManager::GetSingleton(UInt32 singletonID)
@@ -992,7 +1038,6 @@ void PluginManager::ClearScriptDataCache()
 	Dispatch_Message(0, NVSEMessagingInterface::kMessage_ClearScriptDataCache, NULL, 0, NULL);
 	// LambdaManager::ClearCache(); Instead use LambdaClearForParentScript
 }
-
 
 bool Cmd_IsPluginInstalled_Execute(COMMAND_ARGS)
 {

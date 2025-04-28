@@ -1335,3 +1335,45 @@ bool Cmd_DelAnimations_Execute(COMMAND_ARGS)
 	return true;
 }
 
+bool Cmd_GetDoorSound_Execute(COMMAND_ARGS) {
+	UInt32* refResult = (UInt32*)result;
+	*refResult = 0;
+
+	ExpressionEvaluator eval(PASS_COMMAND_ARGS);
+	if (eval.ExtractArgs()) {
+		TESForm* form = eval.Arg(0)->GetTESForm();
+		int mode = static_cast<int>(eval.Arg(1)->GetNumber());
+
+		TESObjectDOOR* doorForm = DYNAMIC_CAST(form, TESForm, TESObjectDOOR);
+		if (!doorForm) {
+			if (IsConsoleMode()) {
+				Console_Print("Form %X is not a TESObjectDOOR", form->refID);
+			}
+
+			return true;
+		}
+
+		*refResult = mode == 0 ? doorForm->openSound->refID : doorForm->closeSound->refID;
+	}
+
+	return true;
+}
+
+
+bool Cmd_FireChallenge_Execute(COMMAND_ARGS) {
+	*result = 0;
+
+	ExpressionEvaluator eval(PASS_COMMAND_ARGS);
+	if (eval.ExtractArgs() && eval.NumArgs() == 6) {
+		const auto challengeType = static_cast<int>(eval.Arg(0)->GetNumber());
+		const auto count         = static_cast<int>(eval.Arg(1)->GetNumber());
+		const auto weapon        = eval.Arg(2)->GetTESForm();
+		const auto val1          = static_cast<int>(eval.Arg(3)->GetNumber());
+		const auto val2          = static_cast<int>(eval.Arg(4)->GetNumber());
+		const auto val3          = static_cast<int>(eval.Arg(5)->GetNumber());
+
+		*result = CdeclCall<uint32_t>(0x5F5950, challengeType, count, nullptr, weapon, val1, val2, val3);
+	}
+
+	return true;
+}

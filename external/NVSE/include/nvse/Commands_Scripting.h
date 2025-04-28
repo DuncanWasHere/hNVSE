@@ -27,6 +27,7 @@ extern CommandInfo kCommandInfo_eval;
 extern CommandInfo kCommandInfo_While;
 extern CommandInfo kCommandInfo_Loop;
 extern CommandInfo kCommandInfo_ForEach;
+extern CommandInfo kCommandInfo_ForEachAlt;
 extern CommandInfo kCommandInfo_Continue;
 extern CommandInfo kCommandInfo_Break;
 extern CommandInfo kCommandInfo_ToString;
@@ -101,3 +102,11 @@ DEFINE_CMD_ALT_EXP(GetSelfAlt_OLD, ThisAlt_OLD,
 DEFINE_CMD_ALIAS(GetSelfAlt, ThisAlt,
 	"Unlike GetSelf, will return ThisObj even if it isn't Persistent and is clutter.",
 	false, nullptr);
+
+
+static ParamInfo kNVSEParams_PluginVersion[] =
+{
+	{	"plugin name",	kNVSEParamType_String,	0	},
+	{	"plugin version",	kNVSEParamType_Number,	0	},
+};
+DEFINE_COMMAND_EXP(PluginVersion, "Internal only - declares a nvse / plugin requirement for a script.", false, kNVSEParams_PluginVersion)

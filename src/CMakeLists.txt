@@ -1,7 +1,11 @@
 add_library("${PROJECT_NAME}" SHARED
         hnvse.cpp
         hnvse.hpp
+        functions/hnvse_fn_region.hpp
         functions/hnvse_fn_worldspace.hpp
+        hooks/hnvse_hk_region.hpp
+        internal/hnvse_utility.cpp
+        internal/hnvse_utility.hpp
 )
 
 add_custom_command(TARGET "${PROJECT_NAME}" POST_BUILD

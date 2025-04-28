@@ -20,8 +20,10 @@
 #include <utility>
 #include <ranges>
 
+#include "Commands_Script.h"
 #include "Hooks_Editor.h"
 #include "ScriptAnalyzer.h"
+#include "StackVariables.h"
 
 std::map<std::pair<Script*, std::string>, Script::VariableType> g_variableDefinitionsMap;
 
@@ -102,14 +104,14 @@ ErrOutput g_ErrOut(ShowError, ShowWarning);
 UInt32 AddStringVar(const char *data, ScriptToken &lh, ExpressionEvaluator &context, StringVar** svOut)
 {
 	if (!lh.refIdx)
-		AddToGarbageCollection(context.eventList, lh.GetVar(), NVSEVarType::kVarType_String);
+		AddToGarbageCollection(context.eventList, lh.GetScriptLocal(), NVSEVarType::kVarType_String);
 	return g_StringMap.Add(context.script->GetModIndex(), data, false, svOut);
 }
 
 UInt32 AddStringVar(StringVar&& other, ScriptToken& lh, ExpressionEvaluator& context, StringVar** svOut)
 {
 	if (!lh.refIdx)
-		AddToGarbageCollection(context.eventList, lh.GetVar(), NVSEVarType::kVarType_String);
+		AddToGarbageCollection(context.eventList, lh.GetScriptLocal(), NVSEVarType::kVarType_String);
 	return g_StringMap.Add(std::move(other), false, svOut);
 }
 #endif
@@ -410,13 +412,14 @@ std::unique_ptr<ScriptToken> Eval_Assign_Numeric(OperatorType op, ScriptToken *l
 	if (lh->GetVariableType() == Script::eVarType_Integer)
 		result = floor(result);
 
-	lh->GetVar()->data = result;
+	lh->GetScriptLocal()->data = result;
+
 	return ScriptToken::Create(result);
 }
 
 std::unique_ptr<ScriptToken> Eval_Assign_String(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *lhVar = lh->GetVar();
+	ScriptLocal* lhVar = lh->GetScriptLocal();
 	StringVar* lhStrVar = lh->GetStringVar();
 	if (rh->type == kTokenType_StringVar && rh->value.var == nullptr) // nullptr = rvalue returned from a command call
 	{
@@ -428,17 +431,25 @@ std::unique_ptr<ScriptToken> Eval_Assign_String(OperatorType op, ScriptToken *lh
 		if (!lhStrVar)
 		{
 			lhVar->data = static_cast<int>(AddStringVar(std::move(*rhStrVar), *lh, *context, &lhStrVar));
+			lhStrVar = g_StringMap.Get(static_cast<int>(lhVar->data));
 		}
 		else
 			lhStrVar->Set(std::move(*rhStrVar));
+
+		lhStrVar->SetOwningModIndex(context->script->GetModIndex());
 		return ScriptToken::Create(lhVar, lhStrVar);
 	}
-	
-	const char *str = rh->GetString();
+	const char* str = rh->GetString();
 	if (!lhStrVar)
 		lhVar->data = static_cast<int>(AddStringVar(str, *lh, *context, &lhStrVar));
 	else
 		lhStrVar->Set(str);
+
+#if _DEBUG
+	lhStrVar->eventList = context->eventList;
+	lhStrVar->script = context->script;
+	lhStrVar->varName = lh->GetVariableName(context->script);
+#endif
 
 	return ScriptToken::Create(lhVar, lhStrVar);
 }
@@ -452,16 +463,11 @@ std::unique_ptr<ScriptToken> Eval_Assign_AssignableString(OperatorType op, Scrip
 std::unique_ptr<ScriptToken> Eval_Assign_Form(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
 	const UInt32 formID = rh->GetFormID();
-	auto const outRefID = reinterpret_cast<UInt64*>(&(lh->GetVar()->data));
-	*outRefID = formID;
-	return ScriptToken::CreateForm(formID);
-}
-
-std::unique_ptr<ScriptToken> Eval_Assign_Form_Number(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
-{
-	const UInt32 formID = rh->GetFormID();
-	auto const outRefID = reinterpret_cast<UInt64*>(&(lh->GetVar()->data));
-	*outRefID = formID;
+	if (auto lhVar = lh->GetScriptLocal())
+	{
+		auto* const outRefID = reinterpret_cast<UInt64*>(&(lhVar->data));
+		*outRefID = formID;
+	}
 	return ScriptToken::CreateForm(formID);
 }
 
@@ -474,10 +480,11 @@ std::unique_ptr<ScriptToken> Eval_Assign_Global(OperatorType op, ScriptToken *lh
 
 std::unique_ptr<ScriptToken> Eval_Assign_Array(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal* var = lh->GetScriptLocal();
 	g_ArrayMap.AddReference(&var->data, rh->GetArrayID(), context->script->GetModIndex());
 	if (!lh->refIdx)
 		AddToGarbageCollection(context->eventList, var, NVSEVarType::kVarType_Array);
+
 #if _DEBUG
 	auto *script = context->script;
 	if (lh->refIdx)
@@ -487,6 +494,7 @@ std::unique_ptr<ScriptToken> Eval_Assign_Array(OperatorType op, ScriptToken *lh,
 	else if (arrayVar && arrayVar->varName.empty())
 		arrayVar->varName = "<eval assign var not found>";
 #endif
+
 	return ScriptToken::CreateArray(var->data);
 }
 
@@ -607,22 +615,31 @@ std::unique_ptr<ScriptToken> Eval_Assign_Elem_Array(OperatorType op, ScriptToken
 
 std::unique_ptr<ScriptToken> Eval_PlusEquals_Number(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal* var = lh->GetScriptLocal();
 	var->data += rh->GetNumber();
+	if (lh->GetVariableType() == Script::eVarType_Integer)
+		var->data = floor(var->data);
+
 	return ScriptToken::Create(var->data);
 }
 
 std::unique_ptr<ScriptToken> Eval_MinusEquals_Number(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal* var = lh->GetScriptLocal();
 	var->data -= rh->GetNumber();
+	if (lh->GetVariableType() == Script::eVarType_Integer)
+		var->data = floor(var->data);
+
 	return ScriptToken::Create(var->data);
 }
 
 std::unique_ptr<ScriptToken> Eval_TimesEquals(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal* var = lh->GetScriptLocal();
 	var->data *= rh->GetNumber();
+	if (lh->GetVariableType() == Script::eVarType_Integer)
+		var->data = floor(var->data);
+
 	return ScriptToken::Create(var->data);
 }
 
@@ -634,25 +651,32 @@ std::unique_ptr<ScriptToken> Eval_DividedEquals(OperatorType op, ScriptToken *lh
 		context->Error("Division by zero");
 		return nullptr;
 	}
-	ScriptLocal *var = lh->GetVar();
-	var->data /= rhNum;
+
+	ScriptLocal* var = lh->GetScriptLocal();
+	var->data /= rh->GetNumber();
+	if (lh->GetVariableType() == Script::eVarType_Integer)
+		var->data = floor(var->data);
+
 	return ScriptToken::Create(var->data);
 }
 
 std::unique_ptr<ScriptToken> Eval_ExponentEquals(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal* var = lh->GetScriptLocal();
 	const double rhNum = rh->GetNumber();
 	const double lhNum = var->data;
 	var->data = pow(lhNum, rhNum);
+	if (lh->GetVariableType() == Script::eVarType_Integer)
+		var->data = floor(var->data);
 	return ScriptToken::Create(var->data);
 }
 
 std::unique_ptr<ScriptToken> Eval_HandleEquals(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
-	const double l = var->data;
 	const double r = rh->GetNumber();
+	ScriptLocal* var = lh->GetScriptLocal();
+	const double l = var->data;
+
 	bool hasError;
 	double const result = Apply_LeftVal_RightVal_Operator(op, l, r, context, hasError);
 	if (!hasError)
@@ -665,20 +689,29 @@ std::unique_ptr<ScriptToken> Eval_HandleEquals(OperatorType op, ScriptToken *lh,
 
 std::unique_ptr<ScriptToken> Eval_PlusEquals_Global(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	lh->GetGlobal()->data += rh->GetNumber();
-	return ScriptToken::Create(static_cast<double>(lh->GetGlobal()->data));
+	auto* global = lh->GetGlobal();
+	global->data += rh->GetNumber();
+	if (global->type != TESGlobal::kType_Float)
+		global->data = floor(global->data);
+	return ScriptToken::Create(static_cast<double>(global->data));
 }
 
 std::unique_ptr<ScriptToken> Eval_MinusEquals_Global(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	lh->GetGlobal()->data -= rh->GetNumber();
-	return ScriptToken::Create(static_cast<double>(lh->GetGlobal()->data));
+	auto* global = lh->GetGlobal();
+	global->data -= rh->GetNumber();
+	if (global->type != TESGlobal::kType_Float)
+		global->data = floor(global->data);
+	return ScriptToken::Create(static_cast<double>(global->data));
 }
 
 std::unique_ptr<ScriptToken> Eval_TimesEquals_Global(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	lh->GetGlobal()->data *= rh->GetNumber();
-	return ScriptToken::Create(static_cast<double>(lh->GetGlobal()->data));
+	auto* global = lh->GetGlobal();
+	global->data *= rh->GetNumber();
+	if (global->type != TESGlobal::kType_Float)
+		global->data = floor(global->data);
+	return ScriptToken::Create(static_cast<double>(global->data));
 }
 
 std::unique_ptr<ScriptToken> Eval_DividedEquals_Global(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
@@ -690,15 +723,20 @@ std::unique_ptr<ScriptToken> Eval_DividedEquals_Global(OperatorType op, ScriptTo
 		return nullptr;
 	}
 
-	lh->GetGlobal()->data /= num;
-	return ScriptToken::Create(static_cast<double>(lh->GetGlobal()->data));
+	auto* global = lh->GetGlobal();
+	global->data /= num;
+	if (global->type != TESGlobal::kType_Float)
+		global->data = floor(global->data);
+	return ScriptToken::Create(static_cast<double>(global->data));
 }
 
 std::unique_ptr<ScriptToken> Eval_ExponentEquals_Global(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	const double lhNum = lh->GetGlobal()->data;
-	lh->GetGlobal()->data = pow(lhNum, rh->GetNumber());
-	return ScriptToken::Create(static_cast<double>(lh->GetGlobal()->data));
+	auto* global = lh->GetGlobal();
+	global->data = pow(global->data, rh->GetNumber());
+	if (global->type != TESGlobal::kType_Float)
+		global->data = floor(global->data);
+	return ScriptToken::Create(static_cast<double>(global->data));
 }
 
 std::unique_ptr<ScriptToken> Eval_HandleEquals_Global(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
@@ -717,7 +755,7 @@ std::unique_ptr<ScriptToken> Eval_HandleEquals_Global(OperatorType op, ScriptTok
 
 std::unique_ptr<ScriptToken> Eval_PlusEquals_String(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal *var = lh->GetScriptLocal();
 	UInt32 strID = static_cast<int>(var->data);
 	StringVar *strVar = g_StringMap.Get(strID);
 	if (!strVar)
@@ -725,17 +763,16 @@ std::unique_ptr<ScriptToken> Eval_PlusEquals_String(OperatorType op, ScriptToken
 		//strID = g_StringMap.Add(context->script->GetModIndex(), "");
 		strID = AddStringVar("", *lh, *context, &strVar);
 		var->data = static_cast<int>(strID);
-		strVar = g_StringMap.Get(strID);
 	}
 
 	strVar->StringRef() += rh->GetString();
-
 	return ScriptToken::Create(var, strVar);
 }
 
+// Currently unused.
 std::unique_ptr<ScriptToken> Eval_TimesEquals_String(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
+	ScriptLocal *var = lh->GetScriptLocal();
 	UInt32 strID = static_cast<int>(var->data);
 	StringVar *strVar = g_StringMap.Get(strID);
 	if (!strVar)
@@ -921,6 +958,10 @@ std::unique_ptr<ScriptToken> Eval_LogicalNot(OperatorType op, ScriptToken *lh, S
 	return ScriptToken::Create(!lh->GetBool());
 }
 
+std::unique_ptr<ScriptToken> Eval_BitwiseNot(OperatorType op, ScriptToken *lhs, ScriptToken *rhs, ExpressionEvaluator *context) {
+	return ScriptToken::Create(static_cast<double>(~static_cast<UInt32>(lhs->GetNumber())));
+}
+
 std::unique_ptr<ScriptToken> Eval_Subscript_Array_Number(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
 	const ArrayID arrID = lh->GetArrayID();
@@ -1003,35 +1044,52 @@ const auto *g_stringVarUninitializedMsg = "String var is uninitialized";
 
 std::unique_ptr<ScriptToken> Eval_Subscript_StringVar_Number(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
-	SInt32 idx = rh->GetNumber();
-	if (var)
+	SInt32 lhIdx{};
+	
+	SInt32 rhIdx = rh->GetNumber();
+	if (auto* lhVar = lh->GetScriptLocal())
 	{
-		StringVar *strVar = g_StringMap.Get(var->data);
-		if (!strVar)
-		{
-			context->Error(g_stringVarUninitializedMsg);
-			return nullptr; // uninitialized
-		}
-
-		if (idx < 0)
-		{
-			// negative index counts from end of string
-			idx += strVar->GetLength();
-		}
+		lhIdx = static_cast<UInt32>(lhVar->data);
 	}
-	else
+	else {
 		context->Error("Invalid variable");
-	return var ? ScriptToken::Create(var->data, idx, idx) : nullptr;
+		return nullptr;
+	}
+
+	StringVar* strVar = g_StringMap.Get(lhIdx);
+	if (!strVar)
+	{
+		context->Error(g_stringVarUninitializedMsg);
+		return nullptr; // uninitialized
+	}
+
+	if (rhIdx < 0)
+	{
+		// negative index counts from end of string
+		rhIdx += strVar->GetLength();
+	}
+
+	return ScriptToken::Create(lhIdx, rhIdx, rhIdx);
 }
 
 std::unique_ptr<ScriptToken> Eval_Subscript_StringVar_Slice(OperatorType op, ScriptToken *lh, ScriptToken *rh, ExpressionEvaluator *context)
 {
-	ScriptLocal *var = lh->GetVar();
-	const Slice *slice = rh->GetSlice();
+	ScriptLocal* var{};
+	UInt32 id{};
+
+	const Slice* slice = rh->GetSlice();
 	double upper = slice->m_upper;
 	double lower = slice->m_lower;
-	StringVar *strVar = g_StringMap.Get(var->data);
+
+	if (auto* lhVar = lh->GetScriptLocal()) {
+		id = static_cast<UInt32>(lhVar->data);
+	}
+	else {
+		context->Error("Invalid variable");
+		return nullptr;
+	}
+
+	auto* strVar = g_StringMap.Get(id);
 	if (!strVar)
 	{
 		context->Error(g_stringVarUninitializedMsg);
@@ -1049,10 +1107,10 @@ std::unique_ptr<ScriptToken> Eval_Subscript_StringVar_Slice(OperatorType op, Scr
 		lower += len;
 	}
 
-	if (var && slice && !slice->bIsString)
-	{
-		return ScriptToken::Create(var->data, lower, upper);
+	if (slice && !slice->bIsString) {
+		return ScriptToken::Create(id, lower, upper);
 	}
+
 	context->Error("Invalid string var slice operation - variable invalid or variable is not a string var");
 	return nullptr;
 }
@@ -1161,24 +1219,30 @@ std::unique_ptr<ScriptToken> Eval_In(OperatorType op, ScriptToken *lh, ScriptTok
 	{
 		const UInt32 iterID = g_ArrayMap.Create(kDataType_String, false, context->script->GetModIndex())->ID();
 
-		ForEachContext con(rh->GetArrayID(), iterID, Script::eVarType_Array, lh->GetVar());
-		return ScriptToken::Create(&con);
+		if (auto* localVar = lh->GetScriptLocal())
+		{
+			ForEachContext con(rh->GetArrayID(), iterID, Variable{ localVar, Script::eVarType_Array });
+			return ScriptToken::Create(&con);
+		}
+		break;
 	}
 	case Script::eVarType_String:
 	{
-		ScriptLocal *var = lh->GetVar();
-		UInt32 iterID = static_cast<int>(var->data);
-		StringVar *sv = g_StringMap.Get(iterID);
-		if (!sv)
-		{
-			//iterID = g_StringMap.Add(context->script->GetModIndex(), "");
-			iterID = AddStringVar("", *lh, *context, nullptr);
-			var->data = static_cast<int>(iterID);
-		}
-
 		const UInt32 srcID = g_StringMap.Add(context->script->GetModIndex(), rh->GetString(), true, nullptr);
-		ForEachContext con(srcID, iterID, Script::eVarType_String, var);
-		return ScriptToken::Create(&con);
+		if (ScriptLocal* var = lh->GetScriptLocal())
+		{
+			UInt32 iterID = static_cast<int>(var->data);
+			StringVar* sv = g_StringMap.Get(iterID);
+			if (!sv)
+			{
+				//iterID = g_StringMap.Add(context->script->GetModIndex(), "");
+				iterID = AddStringVar("", *lh, *context, nullptr);
+				var->data = static_cast<int>(iterID);
+			}
+			ForEachContext con(srcID, iterID, Variable{ var, Script::eVarType_String });
+			return ScriptToken::Create(&con);
+		}
+		break;
 	}
 	case Script::eVarType_Ref:
 	{
@@ -1191,14 +1255,17 @@ std::unique_ptr<ScriptToken> Eval_In(OperatorType op, ScriptToken *lh, ScriptTok
 		}
 		if (form)
 		{
-			ForEachContext con(reinterpret_cast<UInt32>(form), 0, Script::eVarType_Ref, lh->GetVar());
-			return ScriptToken::Create(&con);
+			if (ScriptLocal* var = lh->GetScriptLocal())
+			{
+				ForEachContext con(reinterpret_cast<UInt32>(form), 0, Variable{ var, Script::eVarType_Ref });
+				return ScriptToken::Create(&con);
+			}
 		}
 		context->Error("Source is a base form (must be a reference)");
 		return nullptr;
 	}
 	}
-	context->Error("Unsupported variable type (only array_var, string_var and ref supported)");
+	context->Error("Unsupported variable type to iterate over (only array, string and ref variables supported for non-alt ForEach)");
 	return nullptr;
 }
 
@@ -1384,7 +1451,7 @@ OperationRule kOpRule_Assignment[] =
 		{kTokenType_NumericVar, kTokenType_Number, kTokenType_Number, OP_HANDLER(Eval_Assign_Numeric), true},
 		{kTokenType_StringVar, kTokenType_String, kTokenType_String, OP_HANDLER(Eval_Assign_String), true},
 		{kTokenType_RefVar, kTokenType_Form, kTokenType_Form, OP_HANDLER(Eval_Assign_Form), true},
-		{kTokenType_RefVar, kTokenType_Number, kTokenType_Form, OP_HANDLER(Eval_Assign_Form_Number), true},
+		{kTokenType_RefVar, kTokenType_Number, kTokenType_Form, OP_HANDLER(Eval_Assign_Form), true},
 		{kTokenType_Global, kTokenType_Number, kTokenType_Number, OP_HANDLER(Eval_Assign_Global), true},
 		{kTokenType_ArrayVar, kTokenType_Array, kTokenType_Array, OP_HANDLER(Eval_Assign_Array), true},
 		{kTokenType_ArrayElement, kTokenType_Number, kTokenType_Number, OP_HANDLER(Eval_Assign_Elem_Number), true},
@@ -1590,12 +1657,16 @@ OperationRule kOpRule_MakePair[] =
 };
 
 OperationRule kOpRule_Dot[] =
-	{
+{
 		{kTokenType_Form, kTokenType_Command, kTokenType_Command, OP_HANDLER(Eval_DotSyntax), true}, // Form is used instead of Ref since commands return Form - no way to check which
 		{kTokenType_ArrayElement, kTokenType_Command, kTokenType_Command, OP_HANDLER(Eval_DotSyntax), true},
 #if EDITOR
 		{kTokenType_Command, kTokenType_Command, kTokenType_Command, OP_HANDLER(Eval_DotSyntax), true}, // kTokenType_Command is used as token type when kRetnType_Default is returned
 #endif
+};
+
+OperationRule kOpRule_BitwiseNot[] = {
+		{kTokenType_Number, kTokenType_Invalid, kTokenType_Number, OP_HANDLER(Eval_BitwiseNot), true}
 };
 
 // Operator definitions
@@ -1664,6 +1735,7 @@ Operator s_operators[] =
 		{2, "|=", 2, kOpType_BitwiseOrEquals, OP_RULES(HandleEquals)},
 		{2, "&=", 2, kOpType_BitwiseAndEquals, OP_RULES(HandleEquals)},
 		{2, "%=", 2, kOpType_ModuloEquals, OP_RULES(HandleEquals)},
+		{27, "~", 1, kOpType_BitwiseNot, OP_RULES(BitwiseNot)},
 
 };
 
@@ -1870,10 +1942,53 @@ bool ExpressionParser::ParseArgs(ParamInfo *params, UInt32 numParams, bool bUses
 	UInt8 *numArgsPtr = m_lineBuf->dataBuf + m_lineBuf->dataOffset;
 	m_lineBuf->dataOffset += 1;
 
-	// see if args are enclosed in {braces}, if so don't parse beyond closing brace
-	UInt32 argsEndPos = m_len;
 	char ch;
+	UInt32 argsEndPos = m_len;
+	if (numParams > 1) {
+		// Comparison operators should never be parsed in function params unless they are enclosed in parens
+		// if GetINIFltOrCreateC "Edge Settings:bCharismaAffectsReputationChange" "EDGE TTW Config.ini" == 0
+		//                       |--------------------------------------------------------------------| <- Should be considered for params
+		// or
+		// if GetINIFltOrCreateC "Edge Settings:bCharismaAffectsReputationChange" "EDGE TTW Config.ini" (4 / 2 == 2) == 0
+		//                       |---------------------------------------------------------------------------------|
+		int depth = 0;
+		bool instr = 0;
+		int i = 0;
+		while ((ch = Peek(i++)) && i < argsEndPos) {
+			if (ch == '(' && !instr) {
+				depth++;
+			}
+			else if (ch == ')' && !instr) {
+				depth--;
+			}
+			else if (ch == '"') {
+				instr = !instr;
+			}
+			else if (depth == 0 && !instr) {
+				const auto oldOffset = Offset();
+				Offset() = i;
+				const auto op = ParseOperator(true, false);
+				// ==, !=, <=, >=, ||, && - I consider all of these boundaries for parameters and they should never be parsed with parameters
+				if (op != nullptr && ((op->type >= kOpType_Equals && op->type <= kOpType_LessOrEqual) || op->type == kOpType_LogicalAnd || op->type == kOpType_LogicalOr)) {
+					Offset() = oldOffset;
 
+					argsEndPos = i - 1;
+					while (isspace(static_cast<unsigned char>(Peek(argsEndPos)))) {
+						argsEndPos--;
+					}
+
+					break;
+				}
+				Offset() = oldOffset;
+			}
+			// Left the scope of command
+			else if (depth == -1) {
+				break;
+			}
+		}
+	}
+
+	// see if args are enclosed in {braces}, if so don't parse beyond closing brace
 	while ((ch = Peek(Offset())))
 	{
 		if (!isspace(static_cast<unsigned char>(ch)))
@@ -1937,7 +2052,7 @@ bool ExpressionParser::ParseArgs(ParamInfo *params, UInt32 numParams, bool bUses
 			// reached end of args
 			break;
 		// is arg of expected type(s)?
-		if (!ValidateArgType(static_cast<ParamType>(params[m_numArgsParsed].typeID), argType, bUsesNVSEParamTypes))
+		if (!ValidateArgType(static_cast<ParamType>(params[m_numArgsParsed].typeID), argType, bUsesNVSEParamTypes, g_scriptCommands.GetByOpcode(m_lineBuf->cmdOpcode)))
 		{
 #if RUNTIME
 			ShowCompilerError(m_lineBuf, "Invalid expression for parameter %d. Expected %s.", m_numArgsParsed + 1, params[m_numArgsParsed].typeStr);
@@ -1975,7 +2090,7 @@ bool ExpressionParser::ParseArgs(ParamInfo *params, UInt32 numParams, bool bUses
 	return true;
 }
 
-bool ExpressionParser::ValidateArgType(ParamType paramType, Token_Type argType, bool bIsNVSEParam) const
+bool ExpressionParser::ValidateArgType(ParamType paramType, Token_Type argType, bool bIsNVSEParam, CommandInfo *cmdInfo)
 {
 	if (bIsNVSEParam)
 	{
@@ -2023,11 +2138,12 @@ bool ExpressionParser::ValidateArgType(ParamType paramType, Token_Type argType, 
 			// string var included here b/c old sv_* cmds take strings as integer IDs
 			if (argType != kTokenType_StringVar && CanConvertOperand(argType, kTokenType_String))
 			{
-				auto* cmdInfo = g_scriptCommands.GetByOpcode(m_lineBuf->cmdOpcode);
+				//auto* cmdInfo = g_scriptCommands.GetByOpcode(m_lineBuf->cmdOpcode);
 				if (cmdInfo && (std::string_view(cmdInfo->longName).starts_with("sv_") || cmdInfo->params == kParams_FormatString || cmdInfo->numParams >= 20)) // only allow this for old sv commands that take int
 					return true;
 			}
-			return CanConvertOperand(argType, kTokenType_Number) || CanConvertOperand(argType, kTokenType_StringVar) ||
+			return CanConvertOperand(argType, kTokenType_Number) ||
+				   CanConvertOperand(argType, kTokenType_StringVar) ||
 				   CanConvertOperand(argType, kTokenType_Variable);
 		case kParamType_AnimationGroup:
 		case kParamType_ActorValue:
@@ -2135,7 +2251,7 @@ bool ExpressionParser::GetUserFunctionParams(
 
 		// make sure user isn't trying to use a var more than once as a param
 		for (UInt32 i = 0; i < outParams.size(); i++)
-			if (outParams[i].varIdx == varInfo->idx)
+			if (outParams[i].m_varIdx == varInfo->idx)
 				return false;
 
 		outParams.emplace_back(UserFunctionParam(varInfo->idx, varType));
@@ -2159,7 +2275,7 @@ DynamicParamInfo::DynamicParamInfo(const std::vector<UserFunctionParam> &params)
 {
 	m_numParams = min(kMaxUdfParams, params.size());
 	for (ParamSize_t i = 0; i < m_numParams; i++)
-		m_paramInfo[i] = kDynamicParams[params[i].varType];
+		m_paramInfo[i] = kDynamicParams[params[i].GetType()];
 }
 
 bool ExpressionParser::ParseUserFunctionParameters(std::vector<UserFunctionParam> &out, const std::string &funcScriptText, Script::VarInfoList *funcScriptVars, Script *script) const
@@ -2299,8 +2415,8 @@ bool ExpressionParser::ParseUserFunctionDefinition() const
 	m_lineBuf->WriteByte(params.size());
 	for (auto iter = params.begin(); iter != params.end(); ++iter)
 	{
-		m_lineBuf->Write16(iter->varIdx);
-		m_lineBuf->WriteByte(iter->varType);
+		m_lineBuf->Write16(iter->m_varIdx);
+		m_lineBuf->WriteByte(iter->GetType());
 	}
 
 	// determine which if any local variables must be destroyed on function exit (string and array vars)
@@ -3018,7 +3134,7 @@ ParamParenthResult ExpressionParser::ParseParentheses(ParamInfo *paramInfo, UInt
 	}
 
 	auto &param = paramInfo[paramIndex];
-	if (!ValidateArgType(static_cast<ParamType>(param.typeID), result, false))
+	if (!ValidateArgType(static_cast<ParamType>(param.typeID), result, false, g_scriptCommands.GetByOpcode(m_lineBuf->cmdOpcode)))
 	{
 #if RUNTIME
 		ShowCompilerError(m_lineBuf, "Invalid expression for parameter %d. Expected %s (got %s).", paramIndex + 1, param.typeStr, TokenTypeToString(result));
@@ -3251,7 +3367,7 @@ VariableInfo* CreateVariable(Script* script, ScriptBuffer* scriptBuf, const std:
 		printCompileError("Invalid variable name " + varName + ": Form with that Editor ID already exists.");
 		return nullptr;
 	}
-	if (g_scriptCommands.GetByName(varName.c_str()))
+	if (g_scriptCommands.GetByName(varName.c_str(), &g_currentCompilerPluginVersions.top()))
 	{
 		printCompileError("Invalid variable name " + varName + ": Command with that name already exists.");
 		return nullptr;
@@ -3323,6 +3439,12 @@ std::unique_ptr<ScriptToken> ExpressionParser::ParseOperand(Operator *curOp)
 
 	if (!bExpectStringVar)
 	{
+		if (_stricmp(token.c_str(), "_") == 0) {
+			auto tok = std::make_unique<ScriptToken>();
+			tok->type = kTokenType_OptionalEmpty;
+			return tok;
+		}
+
 		if (_stricmp(token.c_str(), "begin") == 0)
 		{
 			return ParseLambda();
@@ -3455,7 +3577,7 @@ std::unique_ptr<ScriptToken> ExpressionParser::ParseOperand(Operator *curOp)
 	// command?
 	if (!bExpectStringVar)
 	{
-		CommandInfo *cmdInfo = g_scriptCommands.GetByName(token.c_str());
+		CommandInfo *cmdInfo = g_scriptCommands.GetByName(token.c_str(), &g_currentCompilerPluginVersions.top());
 		if (cmdInfo)
 		{
 			// if quest script, check that calling obj supplied for cmds requiring it
@@ -3999,7 +4121,7 @@ bool ExpressionEvaluator::ConvertDefaultArg(ScriptToken *arg, ParamInfo *info, b
 		// handle string_var passed as integer to sv_* cmds
 		if (arg->CanConvertTo(kTokenType_StringVar))
 		{
-			ScriptLocal* var = arg->GetVar();
+			ScriptLocal* var = arg->GetScriptLocal();
 			if (var)
 			{
 				T* out = va_arg(varArgs, T*);
@@ -4079,7 +4201,7 @@ bool ExpressionEvaluator::ConvertDefaultArg(ScriptToken *arg, ParamInfo *info, b
 		if (arg->CanConvertTo(kTokenType_Variable))
 		{
 			auto **out = va_arg(varArgs, ScriptLocal **);
-			*out = arg->GetVar();
+			*out = arg->GetScriptLocal();
 		}
 		else
 			return false;
@@ -5080,6 +5202,10 @@ std::string ExpressionEvaluator::GetLineText(CachedTokens &tokens, ScriptToken *
 					result.pop_back();
 
 				operands.push_back(result);
+				break;
+			}
+			case kTokenType_OptionalEmpty: {
+				operands.push_back("_");
 				break;
 			}
 			default:

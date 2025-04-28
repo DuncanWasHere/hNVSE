@@ -4,6 +4,7 @@
 #include "GameRTTI.h"
 
 InventoryReferenceMap s_invRefMap(0x80);
+ICriticalSection s_invRefMapCS;
 
 void WriteToExtraDataList(BaseExtraList* from, BaseExtraList* to)
 {
@@ -221,7 +222,7 @@ bool InventoryReference::DeferredAction::Execute(InventoryReference* iref)
 		case kAction_Equip:
 		{
 			Actor* actor = (Actor*)containerRef;
-			if (!actor->IsActor())
+			if (!actor->IsActor_Runtime())
 				return false;
 			if (data.xData && data.xData->IsWorn())
 				actor->UnequipItem(data.type, 1, data.xData, 0, false, 0);
@@ -245,13 +246,18 @@ InventoryReference *CreateInventoryRef(TESObjectREFR *container, const Inventory
 {
 	TESObjectREFR *refr = TESObjectREFR::Create(false);
 	InventoryReference *invRefr;
-	s_invRefMap.Insert(refr->refID, &invRefr);
-	invRefr->m_containerRef = container;
-	invRefr->m_tempRef = refr;
-	invRefr->m_tempEntry = NULL;
-	invRefr->m_bDoValidation = bValidate;
-	invRefr->m_bRemoved = false;
-	invRefr->SetData(data);
+
+	{
+		ScopedLock lock(s_invRefMapCS);
+		s_invRefMap.Insert(refr->refID, &invRefr);
+		invRefr->m_containerRef = container;
+		invRefr->m_tempRef = refr;
+		invRefr->m_tempEntry = NULL;
+		invRefr->m_bDoValidation = bValidate;
+		invRefr->m_bRemoved = false;
+		invRefr->SetData(data);
+	}
+
 	return invRefr;
 }
 

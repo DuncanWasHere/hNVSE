@@ -236,7 +236,7 @@ public:
 	virtual void		LoadGame(void * arg);				// load from BGSLoadFormBuffer arg
 	virtual void		LoadGame2(UInt32 changedFlags);		// load from TESSaveLoadGame
 	virtual void		Unk_19(void * arg);
-	virtual void		Unk_1A(void * arg0, void * arg1);
+	virtual void		Unk_1A();	// Might have 2 args at runtime, but has 0 args in editor.
 	virtual void		Unk_1B(void * arg0, void * arg1);
 	virtual void		Revert(UInt32 changedFlags);		// reset changes in form
 	virtual void		Unk_1D(void * arg);
@@ -252,16 +252,16 @@ public:
 	virtual bool		Unk_26(void);		// 00000040
 	virtual bool		Unk_27(void);		// 00010000
 	virtual bool		Unk_28(void);		// 00010000
-	virtual bool		Unk_29(void);		// 00020000
-	virtual bool		Unk_2A(void);		// 00020000
+	virtual bool		Unk_29(bool set);		// 00020000
+	virtual bool		Unk_2A(bool set);		// 00020000
 	virtual bool		Unk_2B(void);		// 00080000
 	virtual bool		Unk_2C(void);		// 02000000
 	virtual bool		Unk_2D(void);		// 40000000
 	virtual bool		Unk_2E(void);		// 00000200
 	virtual void		Unk_2F(bool set);	// 00000200
 	virtual bool		Unk_30(void);		// returns false
-	virtual void		Unk_31(bool set);	// 00000020 then calls Fn12 MarkAsModified
-	virtual void		Unk_32(bool set);	// 00000002 with a lot of housekeeping
+	virtual void		MarkForDeletion(bool set);	// 00000020 then calls Fn12 MarkAsModified. Credits to lStewieAl for the name.
+	virtual void		SetAltered(bool set);	// 00000002 with a lot of housekeeping. Credits to lStewieAl for the name.
 #if RUNTIME
 	virtual void		SetQuestItem(bool set);	// 00000400 then calls Fn12 MarkAsModified
 #else
@@ -272,7 +272,7 @@ public:
 	virtual void		Unk_36(bool set);	// 00020000
 	virtual void		Unk_37(void);		// write esp format
 	virtual void		readOBNDSubRecord(ModInfo * modInfo);	// read esp format
-	virtual bool		Unk_39(void);
+	virtual bool		IsActor_InEditor(void);
 	virtual bool		IsBoundObject(void);
 	virtual bool		Unk_3B(void);
 #if RUNTIME
@@ -283,8 +283,12 @@ public:
 #endif
 	virtual bool		Unk_3D(void);
 	virtual bool		Unk_3E(void);
-	virtual bool		Unk_3F(void) const;	// returnTrue for refr whose baseForm is a TESActorBase
-	virtual bool		IsActor(void);
+#if RUNTIME
+	virtual bool		Unk_3F(void) const;	// Runtime: returnTrue for refr whose baseForm is a TESActorBase. Returns bool(?).
+#else  // Editor: returns EditorID string. Credits to lStewieAl for the name.
+	virtual const char* GetEditorID_InEditor(void) const;
+#endif
+	virtual bool		IsActor_Runtime(void);
 	virtual UInt32		Unk_41(void);
 	virtual void		CopyFrom(const TESForm * form);
 	virtual bool		Compare(TESForm * form);
@@ -297,7 +301,9 @@ public:
 	virtual void		SetRefID(UInt32 refID, bool generateID);
 	virtual char *		GetName2(void);	// GetName as in OBSE ?
 	virtual char *		GetName(void) const;	// GetEditorID as in OBSE ?
-	virtual bool		SetEditorID(const char * edid);		// simply returns true at run-time
+	// simply returns true at run-time, unless JohnnyGuitar NVSE is installed.
+	// It's not SetEditorID in the editor, since it uses a different function for that.
+	virtual bool		SetEditorID_AtRuntime(const char * edid);		
 	// 4E
 
 	const char* GetEditorID() const;
@@ -344,10 +350,13 @@ public:
 	bool IsWeapon() { return typeID == kFormType_TESObjectWEAP; }
 	bool IsArmor() { return typeID == kFormType_TESObjectARMO; }
 
+#if RUNTIME
 	// adds a new form to the game (from CloneForm or LoadForm)
 	void DoAddForm(TESForm* newForm, bool bPersist = true, bool record = true) const;
 	// return a new base form which is the clone of this form
 	TESForm* CloneForm(bool bPersist = true) const;
+#endif
+
 	bool     IsInventoryObject() const;
 
 	bool FormMatches(TESForm* toMatch) const;
@@ -355,12 +364,16 @@ public:
 	// Credits to Jazzisparis
 	UInt8 GetOverridingModIdx() const;
 
+	bool SetEditorID(const char* newID);
+
 	MEMBER_FN_PREFIX(TESForm);
 #if RUNTIME
 	DEFINE_MEMBER_FN(MarkAsTemporary, void, 0x00484490);	// probably a member of TESForm
 #endif
 
 };
+
+const char* GetFullName(TESForm* baseForm);
 
 class TESObject : public TESForm
 {
@@ -2435,6 +2448,9 @@ public:
 	BGSDestructibleObjectForm	destructForm;		// 68
 	BGSOpenCloseForm			openCloseForm;		// 70
 	// There is a tList in 088
+	UInt32                      unk;
+	TESSound*                   openSound;
+	TESSound*                   closeSound;
 };	
 
 // IngredientItem (A4)
@@ -2518,8 +2534,40 @@ class BGSStaticCollection;
 // BGSMovableStatic (6C)
 class BGSMovableStatic;
 
-// BGSPlaceableWater (50)
-class BGSPlaceableWater;
+class TESWaterForm;
+// 50
+class BGSPlaceableWater : public TESBoundObject
+{
+public:
+	enum WaterFlags
+	{
+		kWtrFlag_Reflects =					1,
+		kWtrFlag_ReflectsActors =			2,
+		kWtrFlag_ReflectsLand =				4,
+		kWtrFlag_ReflectsLODLand =			8,
+		kWtrFlag_ReflectsLODBuildings =		0x10,
+		kWtrFlag_ReflectsLODTrees =			0x20,
+		kWtrFlag_ReflectsSky =				0x40,
+		kWtrFlag_ReflectsDynamicObjects =	0x80,
+		kWtrFlag_ReflectsDeadBodies =		0x100,
+
+		kWtrFlag_Refracts =					0x200,
+		kWtrFlag_RefractsActors =			0x400,
+		kWtrFlag_RefractsLand =				0x800,
+		kWtrFlag_RefractsDeadBodies =		0x20000,
+		kWtrFlag_RefractsDynamicObjects =	0x10000,
+
+		kWtrFlag_SilhouetteReflections =	0x40000,
+		kWtrFlag_Depth =					0x10000000,
+		kWtrFlag_ObjectTextureCoords =		0x20000000,
+		kWtrFlag_AutoGenerated =			0x40000000,
+		kWtrFlag_NoUnderwaterFog =			0x80000000
+	};
+
+	TESModel			model;		// 30
+	UInt32				waterFlags;	// 48
+	TESWaterForm		*water;		// 4C
+};
 
 // TESObjectTREE (94)
 class TESObjectTREE;
@@ -5094,7 +5142,9 @@ public:
 	BGSDefaultObjectManager();
 	~BGSDefaultObjectManager();
 
+#if RUNTIME
 	static BGSDefaultObjectManager* GetSingleton();
+#endif
 
 	enum {
 		kDefaultObject_Max = 34,

@@ -79,6 +79,14 @@ struct NVSEInterface
 	UInt32	isNogore;
 
 	void		(*InitExpressionEvaluatorUtils)(ExpressionEvaluatorUtils *utils);
+
+	// CommandReturnType enum defined in CommandTable.h
+	// Same as RegisterTypedCommand, but allows specifying the minimum plugin version a script must have enabled..
+	// ..for the script to compile that version of the command.
+	// Essentially, allows having multiple different versions of commands that scripts can opt into by specifying a plugin version to compile with.
+	// Notably useful to not break JIP ScriptRunner (SR) scripts when replacing the interface of an existing function, 
+	// ..since SR will assume to compile the oldest version of a func unless a more recent plugin version is specified.
+	bool	(*RegisterTypedCommandVersion)(CommandInfo* info, CommandReturnType retnType, UInt32 requiredPluginVersion);
 };
 
 struct NVSEConsoleInterface
@@ -215,10 +223,12 @@ struct NVSEMessagingInterface
 
 		kMessage_SaveGame,				// as above
 	
-		kMessage_ScriptEditorPrecompile,// EDITOR: Dispatched when the user attempts to save a script in the script editor.
-										// NVSE first does its pre-compile checks; if these pass the message is dispatched before
-										// the vanilla compiler does its own checks. 
-										// data: ScriptBuffer* to the buffer representing the script under compilation
+		kMessage_ScriptPrecompile,		// EDITOR+RUNTIME: Dispatched when a script is about to be compiled.
+										// To custom-compile the script yourself during this step, set script->info.compiled to true.
+										// Alternatively, scriptBuffer->errorCode can be set to 1 to prevent the script from compiling entirely.
+										// If custom-compiling, certain Script* variables should be set, and SetEditorID should be called if there was a scriptname extracted.
+										// data: ScriptAndScriptBuffer* to the script + scriptBuffer representing the script under compilation
+										// dataLen: sizeof(ScriptAndScriptBuffer)
 		
 		kMessage_PreLoadGame,			// dispatched immediately before savegame is read by Fallout
 										// dataLen: length of file path, data: char* file path of .fos savegame file
@@ -258,7 +268,7 @@ struct NVSEMessagingInterface
 		kMessage_ScriptCompile,   // EDITOR: called after successful script compilation in GECK. data: pointer to Script
 								// RUNTIME: also gets called after successful script compilation at runtime via functions.
 		kMessage_EventListDestroyed, // called before a script event list is destroyed, dataLen: 4, data: ScriptEventList* ptr
-		kMessage_PostQueryPlugins // called after all plugins have been queried
+		kMessage_PostQueryPlugins, // called after all plugins have been queried
 	};
 
 	UInt32	version;
@@ -338,127 +348,159 @@ struct NVSEMessagingInterface
 
 #if RUNTIME
 
-struct NVSEArrayVarInterface
-{
+struct NVSEArrayVarInterface {
 	enum {
 		kVersion = 2
 	};
 
 	struct Array;
 
-	struct Element
-	{
+	enum {
+		kType_Invalid,
+		kType_Numeric,
+		kType_Form,
+		kType_String,
+		kType_Array
+	};
+
+	struct Element {
 	protected:
-		union
-		{
-			char	* str;
-			Array		* arr;
-			TESForm		* form;
+		Element() {}	//Don't create this class; use ElementL or ElementR instead.
+	public:
+
+		union {
+			UInt32		raw;
+			char* str;
+			Array* arr;
+			TESForm* form;
 			double		num;
 		};
-		UInt8		type;
+		UInt8			type;
 
 		friend class PluginAPI::ArrayAPI;
-		friend class ArrayVar;
-	public:
-		enum
-		{
-			kType_Invalid,
 
-			kType_Numeric,
-			kType_Form,
-			kType_String,
-			kType_Array,
-		};
+		[[nodiscard]] bool IsValid() const { return type != kType_Invalid; }
+		[[nodiscard]] UInt8 GetType() const { return type; }
 
-		void Reset() { if (type == kType_String) { FormHeap_Free(str); } type = kType_Invalid; str = NULL; }
-		~Element() { Reset(); }
-
-		Element() : type(kType_Invalid) { }
-		Element(const char* _str) : type(kType_String) { str = CopyCString(_str); }
-		Element(double _num) : num(_num), type(kType_Numeric) { }
-		Element(TESForm* _form) : form(_form), type(kType_Form) { }
-		Element(Array* _array) : arr(_array), type(kType_Array) { }
-		Element(const Element& rhs) { if (rhs.type == kType_String) { str = CopyCString(rhs.str); } else { num = rhs.num; } type = rhs.type; }
-		Element& operator=(const Element& rhs) {
-			if (this != &rhs) {
-				Reset();
-				if (rhs.type == kType_String) str = CopyCString(rhs.str);
-				else num = rhs.num; // works even if the type is non-numeric.
-				type = rhs.type;
-			}
-			return *this;
-		}
-		bool IsValid() const { return type != kType_Invalid; }
-		UInt8 GetType() const { return type; }
-
-		const char* GetString() const  { return type == kType_String ? str : NULL; }
-		Array* GetArray() const  { return type == kType_Array ? arr : NULL; }
-		UInt32 GetArrayID() const { return type == kType_Array ? reinterpret_cast<UInt32>(arr) : 0; }
-		TESForm * GetTESForm() const  { return type == kType_Form ? form : NULL; }
-		UInt32 GetFormID() const { return type == kType_Form ? (form ? form->refID : 0) : 0; }
-		double GetNumber() const  { return type == kType_Numeric ? num : 0.0; }
-		bool Bool() const
-		{
-			switch (type)
-			{
+		[[nodiscard]] UInt32 Raw() const { return raw; }
+		[[nodiscard]] double Number() const { return type == kType_Numeric ? num : 0; }
+		[[nodiscard]] TESForm* Form() const { return type == kType_Form ? form : NULL; }
+		[[nodiscard]] const char* String() const { return type == kType_String ? str : NULL; }
+		[[nodiscard]] Array* Array() const { return type == kType_Array ? arr : NULL; }
+		[[nodiscard]] bool Bool() const {
+			switch (type) {
 			case kType_Numeric:
-				return num;
+				return num != 0.0;
 			case kType_Form:
-				return form;
+				return form != nullptr;
 			case kType_Array:
-				return arr;
+				return arr != nullptr;
 			case kType_String:
 				return str && str[0];
 			default:
 				return false;
 			}
 		}
+	};
 
-		CommandReturnType GetReturnType() const
-		{
-			switch (GetType())
-			{
-			case kType_Numeric:
-				return kRetnType_Default;
-			case kType_Form:
-				return kRetnType_Form;
-			case kType_Array:
-				return kRetnType_Array;
-			case kType_String:
-				return kRetnType_String;
-			default:
-				return kRetnType_Ambiguous;
+	// Only use this when you're constructing your own array element, instead of receiving it.
+	// Since that way you don't need to use the FormHeap at all to construct the string, and your char* will still get copied fine.
+	// Otherwise, use ElementR, since you'll need to destroy the char* passed by NVSE using FormHeapFree.
+	struct ElementL : Element {
+		ElementL() { type = kType_Invalid; }
+		ElementL(double _num) { type = kType_Numeric; num = _num; }
+		ElementL(TESForm* _form) { type = kType_Form; form = _form; }
+		ElementL(const char* _str) { type = kType_String; str = const_cast<char*>(_str); }
+		ElementL(NVSEArrayVarInterface::Array* _arr) { type = kType_Array; arr = _arr; }
+		ElementL(const Element& rhs) {
+			num = rhs.num;
+			type = rhs.type;
+		}
+
+		ElementL& operator=(double _num) { type = kType_Numeric; num = _num; return *this; }
+		ElementL& operator=(TESForm* _form) { type = kType_Form; form = _form; return *this; }
+		ElementL& operator=(const char* _str) { type = kType_String; str = const_cast<char*>(_str); return *this; }
+		ElementL& operator=(NVSEArrayVarInterface::Array* _arr) { type = kType_Array; arr = _arr; return *this; }
+		ElementL& operator=(const Element& rhs) {
+			if (this != &rhs) {
+				num = rhs.num;
+				type = rhs.type;
 			}
+			return *this;
 		}
 	};
 
-	Array* (* CreateArray)(const Element* data, UInt32 size, Script* callingScript);
-	Array* (* CreateStringMap)(const char** keys, const NVSEArrayVarInterface::Element* values, UInt32 size, Script* callingScript);
-	Array* (* CreateMap)(const double* keys, const NVSEArrayVarInterface::Element* values, UInt32 size, Script* callingScript);
+	//Use this when receiving elements from NVSE, or generally need to (de)allocate the string on the FormHeap.
+	struct ElementR : Element {
+		void Reset() { if (type == kType_String) { GameHeapFree(str); } type = kType_Invalid; str = NULL; }
 
-	bool	(* AssignCommandResult)(Array* arr, double* dest);
-	void	(* SetElement)(Array* arr, const Element& key, const Element& value);
-	void	(* AppendElement)(Array* arr, const Element& value);
+		ElementR() { type = kType_Invalid; }
+		ElementR(double _num) { type = kType_Numeric; num = _num; }
+		ElementR(TESForm* _form) { type = kType_Form; form = _form; }
+		ElementR(const char* _str) { type = kType_String; str = CopyCString(_str); }
+		ElementR(NVSEArrayVarInterface::Array* _arr) { type = kType_Array; arr = _arr; }
+		ElementR(const Element& rhs) {
+			type = rhs.type;
+			if (type == kType_String)
+				str = CopyCString(rhs.str);
+			else num = rhs.num;
+		}
 
-	UInt32	(* GetArraySize)(Array* arr);
-	Array*	(* LookupArrayByID)(UInt32 id);
-	bool	(* GetElement)(Array* arr, const Element& key, Element& outElement);
-	bool	(* GetElements)(Array* arr, Element* elements, Element* keys);
+		~ElementR() { if (type == kType_String) GameHeapFree(str); }
+
+		ElementR& operator=(double _num) { type = kType_Numeric; num = _num; return *this; }
+		ElementR& operator=(TESForm* _form) { type = kType_Form; form = _form; return *this; }
+		ElementR& operator=(const char* _str) { type = kType_String; str = CopyCString(_str); return *this; }
+		ElementR& operator=(NVSEArrayVarInterface::Array* _arr) { type = kType_Array; arr = _arr; return *this; }
+		ElementR& operator=(const Element& rhs) {
+			if (this != &rhs) {
+				if (type == kType_String)
+					GameHeapFree(str);
+				type = rhs.type;
+				if (type == kType_String)
+					str = CopyCString(rhs.str);
+				else num = rhs.num;
+			}
+			return *this;
+		}
+	};
+
+	Array* (*CreateArray)(const Element* data, UInt32 size, Script* callingScript);
+	Array* (*CreateStringMap)(const char** keys, const NVSEArrayVarInterface::Element* values, UInt32 size, Script* callingScript);
+	Array* (*CreateMap)(const double* keys, const NVSEArrayVarInterface::Element* values, UInt32 size, Script* callingScript);
+
+	bool	(*AssignCommandResult)(Array* arr, double* dest);
+	void	(*SetElement)(Array* arr, const Element& key, const Element& value);
+	void	(*AppendElement)(Array* arr, const Element& value);
+
+	UInt32(*GetArraySize)(Array* arr);
+	Array* (*LookupArrayByID)(UInt32 id);
+	bool	(*GetElement)(Array* arr, const Element& key, Element& outElement);
+	bool	(*GetElements)(Array* arr, Element* elements, Element* keys);  //sorted by Keys alphabetically / numerically
 
 	// version 2
-	UInt32	(* GetArrayPacked)(Array* arr);
+	UInt32(*GetArrayPacked)(Array* arr);
 
-	enum ContainerTypes
-	{
+	enum ContainerTypes : int {
 		kArrType_Invalid = -1,
 		kArrType_Array = 0,
 		kArrType_Map,
 		kArrType_StringMap
 	};
-	
-	int		(* GetContainerType)(Array* arr);
-	bool	(* ArrayHasKey)(Array* arr, const Element& key);
+
+	ContainerTypes(*GetContainerType)(Array* arr);
+	bool	(*ArrayHasKey)(Array* arr, const Element& key);
+};
+typedef NVSEArrayVarInterface::Array NVSEArrayVar;
+typedef NVSEArrayVarInterface::Element NVSEArrayElement;
+//From JIP:
+typedef NVSEArrayVarInterface::ElementR ArrayElementR;
+typedef NVSEArrayVarInterface::ElementL ArrayElementL;
+
+enum Array_Types {
+	kType_Array = 0,
+	kType_Map,
+	kType_StringMap,
 };
 
 #endif
@@ -1016,6 +1058,63 @@ struct NVSEEventManagerInterface
 };
 #endif
 
+/**** plugin API docs **********************************************************
+ *
+ *	IMPORTANT: Before releasing a plugin, you MUST contact the NVSE team at the
+ *	contact addresses listed in nvse_readme.txt to register a range of opcodes.
+ *	This is required to prevent conflicts between multiple plugins, as each
+ *	command must be assigned a unique opcode.
+ *
+ *	The base API is pretty simple. Create a project based on the
+ *	nvse_plugin_example project included with the NVSE source code, then define
+ *	and export these functions:
+ *
+ *	bool NVSEPlugin_Query(const NVSEInterface * nvse, PluginInfo * info)
+ *
+ *	This primary purposes of this function are to fill out the PluginInfo
+ *	structure, and to perform basic version checks based on the info in the
+ *	NVSEInterface structure. Return false if your plugin is incompatible with
+ *	the version of NVSE or Fallout passed in, otherwise return true. In either
+ *	case, fill out the PluginInfo structure.
+ *
+ *	If the plugin is being loaded in the context of the editor, isEditor will be
+ *	non-zero, editorVersion will contain the current editor version, and
+ *	falloutVersion will be zero. In this case you can probably just return
+ *	true, however if you have multiple DLLs implementing the same behavior, for
+ *	example one for each version of Fallout, only one of them should return
+ *	true.
+ *
+ *	The PluginInfo fields should be filled out as follows:
+ *	- infoVersion should be set to PluginInfo::kInfoVersion
+ *	- name should be a pointer to a null-terminated string uniquely identifying
+ *	  your plugin, it will be used in the plugin querying API
+ *	- version is only used by the plugin query API, and will be returned to
+ *	  scripts requesting the current version of your plugin
+ *
+ *	bool NVSEPlugin_Load(const NVSEInterface * nvse)
+ *
+ *	In this function, use the SetOpcodeBase callback in NVSEInterface to set the
+ *	opcode base to your assigned value, then use RegisterCommand to register all
+ *	of your commands. NVSE will fix up your CommandInfo structure when loaded
+ *	in the context of the editor, and will fill in any NULL callbacks with their
+ *	default values, so don't worry about having a unique 'execute' callback for
+ *	the editor, and don't provide a 'parse' callback unless you're actually
+ *	overriding the default behavior. The opcode field will also be automatically
+ *	updated with the next opcode in the sequence started by SetOpcodeBase.
+ *
+ *	At this time, or at any point forward you can call the QueryInterface
+ *	callback to retrieve an interface structure for the base services provided
+ *	by the NVSE core.
+ *
+ *	You may optionally return false from this function to unload your plugin,
+ *	but make sure that you DO NOT register any commands if you do.
+ *
+ *	Note that all structure versions are backwards-compatible, so you only need
+ *	to check against the latest version that you need. New fields will be only
+ *	added to the end, and all old fields will remain compatible with their
+ *	previous implementations.
+ *
+ ******************************************************************************/
 struct PluginInfo
 {
 	enum
@@ -1031,64 +1130,25 @@ struct PluginInfo
 typedef bool (* _NVSEPlugin_Query)(const NVSEInterface * nvse, PluginInfo * info);
 typedef bool (* _NVSEPlugin_Load)(const NVSEInterface * nvse);
 
-/**** plugin API docs **********************************************************
- *	
- *	IMPORTANT: Before releasing a plugin, you MUST contact the NVSE team at the
- *	contact addresses listed in nvse_readme.txt to register a range of opcodes.
- *	This is required to prevent conflicts between multiple plugins, as each
- *	command must be assigned a unique opcode.
- *	
- *	The base API is pretty simple. Create a project based on the
- *	nvse_plugin_example project included with the NVSE source code, then define
- *	and export these functions:
- *	
- *	bool NVSEPlugin_Query(const NVSEInterface * nvse, PluginInfo * info)
- *	
- *	This primary purposes of this function are to fill out the PluginInfo
- *	structure, and to perform basic version checks based on the info in the
- *	NVSEInterface structure. Return false if your plugin is incompatible with
- *	the version of NVSE or Fallout passed in, otherwise return true. In either
- *	case, fill out the PluginInfo structure.
- *	
- *	If the plugin is being loaded in the context of the editor, isEditor will be
- *	non-zero, editorVersion will contain the current editor version, and
- *	falloutVersion will be zero. In this case you can probably just return
- *	true, however if you have multiple DLLs implementing the same behavior, for
- *	example one for each version of Fallout, only one of them should return
- *	true.
- *	
- *	The PluginInfo fields should be filled out as follows:
- *	- infoVersion should be set to PluginInfo::kInfoVersion
- *	- name should be a pointer to a null-terminated string uniquely identifying
- *	  your plugin, it will be used in the plugin querying API
- *	- version is only used by the plugin query API, and will be returned to
- *	  scripts requesting the current version of your plugin
- *	
- *	bool NVSEPlugin_Load(const NVSEInterface * nvse)
- *	
- *	In this function, use the SetOpcodeBase callback in NVSEInterface to set the
- *	opcode base to your assigned value, then use RegisterCommand to register all
- *	of your commands. NVSE will fix up your CommandInfo structure when loaded
- *	in the context of the editor, and will fill in any NULL callbacks with their
- *	default values, so don't worry about having a unique 'execute' callback for
- *	the editor, and don't provide a 'parse' callback unless you're actually
- *	overriding the default behavior. The opcode field will also be automatically
- *	updated with the next opcode in the sequence started by SetOpcodeBase.
- *	
- *	At this time, or at any point forward you can call the QueryInterface
- *	callback to retrieve an interface structure for the base services provided
- *	by the NVSE core.
- *	
- *	You may optionally return false from this function to unload your plugin,
- *	but make sure that you DO NOT register any commands if you do.
- *	
- *	Note that all structure versions are backwards-compatible, so you only need
- *	to check against the latest version that you need. New fields will be only
- *	added to the end, and all old fields will remain compatible with their
- *	previous implementations.
- *	
- ******************************************************************************/
 
+/**** PluginExpressionEvaluator docs **********************************************************
+ *	This is an alternate interface to extract args for a script function, with better support for more complex tokens.
+ *	For example, it can extract arrays, slices, and strings directly.
+ * 
+ *	To initialize the s_expEvalUtils global that is required for PluginExpressionEvaluator to work, 
+ *	.. call InitExpressionEvaluatorUtils from the NVSEInterface after your plugin is loaded.
+ * 
+ *	When used, it also subtly changes how the parsing will work for the expressions following the function call, 
+ *  ..enabling the use of new NVSE expressions: https://geckwiki.com/index.php?title=NVSE_Expressions
+ *	As such, any script function using this evaluator belongs to the category of NVSE-Aware Functions:
+ *	https://geckwiki.com/index.php?title=Category:NVSE-Aware_Functions
+ *
+ *	A script function using the PluginExpressionEvaluator *MUST* use the Cmd_Expression_Plugin_Parse parser.
+ *	For example, this could mean using the premade DEFINE_COMMAND_PLUGIN_EXP or DEFINE_COMMAND_ALT_PLUGIN_EXP macro definitions.
+ *	
+ *	Also, parameters for the ParamInfo *MUST* be defined using the NVSEParamType enum, NOT the regular ParamType enum.
+ *	For example, using kParamType_Integer is invalid, but kNVSEParamType_Number is valid.
+ ******************************************************************************/
 struct PluginScriptToken;
 struct PluginTokenPair;
 struct PluginTokenSlice;
@@ -1332,7 +1392,7 @@ public:
 		if (params.size())
 		{
 			paramCopy = new ParamInfo[params.size()];
-			int index = 0;
+			size_t index = 0;
 			for (const auto& param : params)
 			{
 				paramCopy[index++] = param;

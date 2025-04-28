@@ -228,3 +228,29 @@ static ParamInfo kNVSEParams_OneArray[] =
 };
 
 DEFINE_COMMAND_EXP(ar_Unique, "returns a new array with no duplicate elements from the source array", false, kNVSEParams_OneArray);
+
+static ParamInfo kNVSEParams_ar_Exists[] =
+{
+	{	"array",		kNVSEParamType_Array,		0	}, // unlike ar_Find, pass array first
+	{	"toFind",		(kNVSEParamType_BasicType | kNVSEParamType_Pair),	0	},
+	{	"range",		kNVSEParamType_Slice,		1	}, // only possibly used for packed arrays, and only if toFind isn't a pair.
+};
+DEFINE_COMMAND_EXP(ar_Exists, "For packed arrays, check if value exists. Else (map), check if key exists.", 0, kNVSEParams_ar_Exists);
+
+
+static ParamInfo kNVSEParams_ar_Count[] =
+{
+	{	"array",		kNVSEParamType_Array,		0	},
+	{	"toFind",		(kNVSEParamType_BasicType | kNVSEParamType_Pair),	0	},
+};
+DEFINE_COMMAND_EXP(ar_Count, "Count how many times a given value is found inside of an array.", 0, kNVSEParams_ar_Count)
+
+DEFINE_COMMAND_EXP(ar_CountWhere, "Count how many times a value matches via a specified UDF.", 0, kNVSEParams_OneArray_OneFunction);
+
+static ParamInfo kNVSEParams_OneArray_OneNumber[] =
+{
+	{	"array",		kNVSEParamType_Array,	0	},
+	{	"index",		kNVSEParamType_Number,	0	},
+};
+
+DEFINE_COMMAND_EXP(ar_GetNth, "Get the nth element of an array, if it exists", 0, kNVSEParams_OneArray_OneNumber);

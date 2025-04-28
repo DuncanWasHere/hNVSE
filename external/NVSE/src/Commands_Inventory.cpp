@@ -1756,6 +1756,10 @@ bool Cmd_GetHotkeyItem_Execute(COMMAND_ARGS)
 					!iter.End();
 					++iter)
 				{
+					if (!iter.Get()) {
+						continue;
+					}
+
 					ExtraHotkey* xHotKey = (ExtraHotkey*)iter->GetByType(kExtraData_Hotkey);
 					if (xHotKey && xHotKey->index == hotkeyNum)
 					{
@@ -2706,7 +2710,7 @@ bool Cmd_GetPlayerCurrentAmmo_Execute(COMMAND_ARGS)
 
 bool Cmd_HasAmmoEquipped_Eval(COMMAND_ARGS_EVAL) {
 	*result = 0;
-	if (thisObj && thisObj->IsActor()) {
+	if (thisObj && thisObj->IsActor_Runtime()) {
 		auto actor = static_cast<Actor*>(thisObj);
 		if (auto pBaseProc = actor->baseProcess) {
 			if (const auto* pAmmoInfo = pBaseProc->GetAmmoInfo()) {
