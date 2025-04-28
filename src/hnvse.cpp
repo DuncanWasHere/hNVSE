@@ -105,7 +105,7 @@ extern "C" {
             g_arrInterface = static_cast<NVSEArrayVarInterface*>(nvse->QueryInterface(kInterface_ArrayVar));
             ExtractArgsEx = g_script->ExtractArgsEx;
 
-            // INI Loading (from Wall)
+            // INI Loading (from Wall (from karut))
             _MESSAGE("Reading INI...");
             char cINIDir[MAX_PATH];
             GetModuleFileNameA(GetModuleHandle(NULL), cINIDir, MAX_PATH);
